@@ -1,4 +1,4 @@
-# TIDEWATCH — Maritime Surveillance Dashboard
+# SeaPulse— Maritime Surveillance Dashboard
 
 A front-end-only, mock-data maritime surveillance command center. No build step,
 no server — open `index.html` in a browser and it runs.

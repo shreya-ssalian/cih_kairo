@@ -36,9 +36,13 @@ import {
 // const ShieldAlert = Dummy;
 
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell, Legend
 } from 'recharts';
+
+import { MapContainer, TileLayer, Marker, Polygon as LPolygon, Polyline as LPolyline, Pane, Tooltip } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 /* ======================== CONSTANTS & HELPERS ======================== */
 
@@ -295,11 +299,26 @@ function TreasureMarkers({ ships }) {
 const MAX_RENDERED_SHIPS = 300;
 
 function OceanMap({ zones, ships, selectedShipId, onSelectShip, drawMode, draftPoints, onMapClick, trailsOn, tick, height }) {
-  const svgRef = useRef(null);
+  const mapRef = useRef(null);
 
-  // Cap what actually gets drawn as SVG nodes - a 5,000-ship fleet still
-  // drives the real messages/sec and alert stats, but only a sample (plus
-  // the selected ship, so it's never hidden) is rendered on the map itself.
+  // Geographic bounding box that corresponds to the simulation canvas.
+  // Adjust these if you want to place the simulation over a different real-world area.
+  const LNG_MIN = 120, LNG_MAX = 140; // longitude range
+  const LAT_MIN = -10, LAT_MAX = 10;   // latitude range
+
+  const simToLatLng = (p) => {
+    const [x, y] = p;
+    const lng = LNG_MIN + (x / W) * (LNG_MAX - LNG_MIN);
+    const lat = LAT_MAX - (y / H) * (LAT_MAX - LAT_MIN);
+    return [lat, lng];
+  };
+  const latLngToSim = ([lat, lng]) => {
+    const x = ((lng - LNG_MIN) / (LNG_MAX - LNG_MIN)) * W;
+    const y = ((LAT_MAX - lat) / (LAT_MAX - LAT_MIN)) * H;
+    return [Math.round(x), Math.round(y)];
+  };
+
+  // Cap what actually gets drawn as map layers to avoid DOM churn.
   const renderedShips = useMemo(() => {
     if (ships.length <= MAX_RENDERED_SHIPS) return ships;
     const sample = ships.slice(0, MAX_RENDERED_SHIPS);
@@ -310,102 +329,166 @@ function OceanMap({ zones, ships, selectedShipId, onSelectShip, drawMode, draftP
     return sample;
   }, [ships, selectedShipId]);
 
-  const handleClick = (e) => {
+  const handleMapClick = (e) => {
     if (!drawMode) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const scaleX = W / rect.width, scaleY = H / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { lat, lng } = e.latlng;
+    const [x, y] = latLngToSim([lat, lng]);
     onMapClick(x, y);
   };
 
-  const gridLinesV = [];
-  for (let x = 0; x <= W; x += 100) gridLinesV.push(x);
-  const gridLinesH = [];
-  for (let y = 0; y <= H; y += 100) gridLinesH.push(y);
+  const center = [(LAT_MIN + LAT_MAX) / 2, (LNG_MIN + LNG_MAX) / 2];
+
+  // Responsive height: on large (desktop) view use a VH-based height so the
+  // map scales with the browser; on smaller screens fall back to the explicit
+  // `height` prop or a fixed default.
+  const [mapHeight, setMapHeight] = useState(height || 520);
+  useEffect(() => {
+    const update = () => {
+      const w = window.innerWidth || 0;
+      if (w >= 1024) setMapHeight(Math.max(height || 520, Math.round(window.innerHeight * 0.72)));
+      else setMapHeight(height || 520);
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [height]);
+
+  // Generate latitude/longitude grid lines (darker lines). Grid step chosen
+  // to be visually reasonable for the bounding box; adjust `gridStepDeg`
+  // if you want denser/sparser lines.
+  const gridStepDeg = 2; // degrees
+  const gridLines = useMemo(() => {
+    const lines = [];
+    // vertical (longitude) lines
+    for (let lng = Math.ceil(LNG_MIN); lng <= LNG_MAX; lng += gridStepDeg) {
+      lines.push({ positions: [[LAT_MIN, lng], [LAT_MAX, lng]] });
+    }
+    // horizontal (latitude) lines
+    for (let lat = Math.ceil(LAT_MIN); lat <= LAT_MAX; lat += gridStepDeg) {
+      lines.push({ positions: [[lat, LNG_MIN], [lat, LNG_MAX]] });
+    }
+    return lines;
+  }, [LNG_MIN, LNG_MAX, LAT_MIN, LAT_MAX]);
+
+  // labels for grid lines (degrees) rendered at map edges
+  const longLabels = useMemo(() => {
+    const items = [];
+    for (let lng = Math.ceil(LNG_MIN); lng <= LNG_MAX; lng += gridStepDeg) {
+      items.push({ pos: [LAT_MAX, lng], text: `${lng.toFixed(0)}°${lng >= 0 ? 'E' : 'W'}` });
+    }
+    return items;
+  }, [LNG_MIN, LNG_MAX, LAT_MAX]);
+  const latLabels = useMemo(() => {
+    const items = [];
+    for (let lat = Math.ceil(LAT_MIN); lat <= LAT_MAX; lat += gridStepDeg) {
+      items.push({ pos: [lat, LNG_MIN], text: `${Math.abs(lat).toFixed(0)}°${lat >= 0 ? 'N' : 'S'}` });
+    }
+    return items;
+  }, [LAT_MIN, LAT_MAX, LNG_MIN]);
+
+  const [cursorCoord, setCursorCoord] = useState(null);
 
   return (
-    <div className="sp-map-wrap" style={{ height: height || 520 }}>
-      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="sp-map-svg" onClick={handleClick} style={{ cursor: drawMode ? 'crosshair' : 'default' }}>
-        <defs>
-          <radialGradient id="oceanGrad" cx="50%" cy="40%" r="80%">
-            <stop offset="0%" stopColor="#123a54" />
-            <stop offset="60%" stopColor="#0b2c46" />
-            <stop offset="100%" stopColor="#061524" />
-          </radialGradient>
-          <radialGradient id="landGrad" cx="35%" cy="25%" r="85%">
-            <stop offset="0%" stopColor="#dab97e" />
-            <stop offset="100%" stopColor="#a9824e" />
-          </radialGradient>
-        </defs>
-        <rect x="0" y="0" width={W} height={H} fill="url(#oceanGrad)" />
-        {gridLinesV.map(x => <line key={'v'+x} x1={x} y1={0} x2={x} y2={H} className="sp-grid-line" />)}
-        {gridLinesH.map(y => <line key={'h'+y} x1={0} y1={y} x2={W} y2={y} className="sp-grid-line" />)}
+    <div className="sp-map-wrap" style={{ height: mapHeight, transition: 'height 220ms ease' }}>
+      <MapContainer center={center} zoom={6} style={{ height: '100%', width: '100%' }} whenCreated={m => (mapRef.current = m)} onclick={handleMapClick}>
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; OpenStreetMap contributors'
+        />
 
-        {LAND_MASSES.map(l => {
-          const c = centroid(l.points);
-          return (
-            <g key={l.id}>
-              <polygon points={l.points.map(p => p.join(',')).join(' ')} fill="url(#landGrad)" stroke="#6b4b28" strokeWidth="1.75" />
-              {l.icon === 'mountain' && <path d={`M${c.x-9},${c.y+7} L${c.x},${c.y-9} L${c.x+9},${c.y+7} Z`} fill="#6b4b28" opacity="0.7" />}
-              {l.icon === 'treasure' && <text x={c.x} y={c.y + 4} textAnchor="middle" fontSize="13">💰</text>}
-              <text x={c.x} y={c.y + (l.icon ? 20 : 4)} textAnchor="middle" className="sp-land-label">{l.name}</text>
-            </g>
-          );
-        })}
+        {/* Add scale control and cursor tracking */}
+        <MapControlAddOn mapRef={mapRef} setCursorCoord={setCursorCoord} />
 
-        {zones.map(z => {
-          const t = ZONE_TYPES[z.type];
-          const c = centroid(z.points);
-          return (
-            <g key={z.id}>
-              <polygon points={z.points.map(p => p.join(',')).join(' ')} fill={t.fill} stroke={t.color} strokeWidth="1.5" strokeDasharray="5,3" />
-              <text x={c.x} y={c.y} textAnchor="middle" className="sp-zone-label" fill={t.color}>{z.name}</text>
-            </g>
-          );
-        })}
+        <Pane name="land" style={{ zIndex: 400 }}>
+          {LAND_MASSES.map(l => (
+            <LPolygon key={l.id} positions={l.points.map(simToLatLng)} pathOptions={{ color: '#6b4b28', fillColor: '#d6b887', weight: 1.75 }} />
+          ))}
+        </Pane>
+
+        <Pane name="zones" style={{ zIndex: 450 }}>
+          {zones.map(z => {
+            const t = ZONE_TYPES[z.type];
+            return (
+              <LPolygon key={z.id} positions={z.points.map(simToLatLng)} pathOptions={{ color: t.color, fillColor: t.fill, weight: 1.5, dashArray: '5,3' }} />
+            );
+          })}
+        </Pane>
+
+        <Pane name="grid" style={{ zIndex: 460 }}>
+          {gridLines.map((g, i) => (
+            <LPolyline key={'grid-' + i} positions={g.positions} pathOptions={{ color: 'rgba(0,0,0,0.38)', weight: 1.25, opacity: 0.9 }} />
+          ))}
+        </Pane>
+        {/* grid labels */}
+        <Pane name="grid-labels" style={{ zIndex: 470 }}>
+          {longLabels.map((l, i) => (
+            <Marker key={'ll-' + i} position={l.pos} interactive={false} icon={L.divIcon({ className: 'sp-grid-label', html: l.text, iconSize: [60, 20], iconAnchor: [30, -6] })} />
+          ))}
+          {latLabels.map((l, i) => (
+            <Marker key={'la-' + i} position={l.pos} interactive={false} icon={L.divIcon({ className: 'sp-grid-label', html: l.text, iconSize: [50, 20], iconAnchor: [-6, 10] })} />
+          ))}
+        </Pane>
 
         {drawMode && draftPoints.length > 0 && (
-          <polyline points={draftPoints.map(p => p.join(',')).join(' ')} fill="rgba(212,175,55,0.15)" stroke="var(--gold)" strokeWidth="2" strokeDasharray="4,3" />
+          <LPolyline positions={draftPoints.map(simToLatLng)} pathOptions={{ color: 'var(--gold)', dashArray: '4,3', weight: 2, opacity: 0.95 }} />
         )}
-        {drawMode && draftPoints.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="4" fill="var(--gold)" />)}
 
-        {/* Rendering every ship in a 5,000-vessel fleet as live SVG each tick
-            would stutter the browser - the map shows a representative
-            sample while messages/sec, alerts, and analytics still reflect
-            the FULL fleet. This mirrors how a real ops dashboard would
-            cluster/sample a dense map rather than draw every contact. */}
         {trailsOn && renderedShips.map(s => s.history.length > 1 && (
-          <polyline key={'trail-' + s.id}
-            points={s.history.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="none" stroke={BAND_COLOR[s.band]} strokeOpacity="0.35" strokeWidth="1.2" />
+          <LPolyline key={'trail-' + s.id} positions={s.history.map(p => simToLatLng([p.x, p.y]))} pathOptions={{ color: BAND_COLOR[s.band], opacity: 0.35, weight: 1.2 }} />
         ))}
 
-        {renderedShips.map(s => (
-          <g key={s.id} transform={`translate(${s.x},${s.y}) rotate(${s.heading})`}
-            onClick={(e) => { e.stopPropagation(); onSelectShip(s.id); }}
-            style={{ cursor: 'pointer', opacity: s.silent ? 0.3 : 1 }}>
-            {(s.band === 'High' || s.band === 'Critical') && (
-              <circle r="11" fill="none" stroke={BAND_COLOR[s.band]} strokeWidth="1.5" className="sp-pulse-ring" />
-            )}
-            <path d="M0,-7 L5,7 L0,4 L-5,7 Z" fill={BAND_COLOR[s.band]} stroke={s.id === selectedShipId ? '#fff' : 'rgba(0,0,0,0.4)'} strokeWidth={s.id === selectedShipId ? 1.4 : 0.5} />
-          </g>
-        ))}
-
-        <TreasureMarkers ships={renderedShips} />
-
-        <g transform={`translate(${W - 70}, 68)`} className="sp-compass-slow">
-          <circle r="42" fill="rgba(7,22,38,0.6)" stroke="var(--gold)" strokeWidth="1.5" />
-          <circle r="42" fill="none" stroke="var(--turquoise)" strokeWidth="1" opacity={tick % 2 === 0 ? 0.7 : 0.15} />
-          {[0,45,90,135,180,225,270,315].map(a => (
-            <line key={a} x1="0" y1="-42" x2="0" y2="-36" stroke="var(--gold)" strokeWidth="1" transform={`rotate(${a})`} />
-          ))}
-          <text x="0" y="-46" textAnchor="middle" className="sp-compass-n">N</text>
-          <path d="M0,-30 L6,0 L0,30 L-6,0 Z" fill="var(--gold)" opacity="0.85" />
-        </g>
-      </svg>
+        {renderedShips.map(s => {
+          const pos = simToLatLng([s.x, s.y]);
+          const svg = `
+            <svg width="32" height="32" viewBox="-14 -14 28 28" xmlns="http://www.w3.org/2000/svg">
+              <g transform="rotate(${s.heading})">
+                ${(s.band === 'High' || s.band === 'Critical') ? '<circle r="12" fill="none" stroke="' + BAND_COLOR[s.band] + '" stroke-width="1.2" opacity="0.9" />' : ''}
+                <path d="M0,-7 L5,7 L0,4 L-5,7 Z" fill="${BAND_COLOR[s.band]}" stroke="${s.id === selectedShipId ? '#fff' : 'rgba(0,0,0,0.35)'}" stroke-width="${s.id === selectedShipId ? 1.2 : 0.6}" />
+              </g>
+            </svg>
+          `;
+          const icon = L.divIcon({ html: svg, className: 'sp-ship-icon', iconSize: [32, 32], iconAnchor: [16, 16] });
+          return (
+            <Marker key={s.id} position={pos} icon={icon} eventHandlers={{ click: (e) => { e.originalEvent.stopPropagation(); onSelectShip(s.id); } }}>
+              <Tooltip direction="top" offset={[0, -18]} opacity={0.95} permanent={false}>
+                <div style={{ whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700 }}>{s.name} · {formatDeg(pos[0], pos[1])}</div>
+              </Tooltip>
+            </Marker>
+          );
+        })}
+      </MapContainer>
+      {cursorCoord && (
+        <div className="sp-map-overlay sp-coords">{formatDeg(cursorCoord.lat, cursorCoord.lng)}</div>
+      )}
     </div>
   );
+}
+
+function MapControlAddOn({ mapRef, setCursorCoord }) {
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // add scale control
+    const scale = L.control.scale({ imperial: false, metric: true });
+    scale.addTo(map);
+
+    const onMove = (e) => {
+      const { lat, lng } = e.latlng;
+      setCursorCoord({ lat, lng });
+    };
+    map.on('mousemove', onMove);
+    return () => {
+      map.off('mousemove', onMove);
+      map.removeControl(scale);
+    };
+  }, [mapRef, setCursorCoord]);
+  return null;
+}
+
+function formatDeg(lat, lng) {
+  const latSym = `${Math.abs(lat).toFixed(4)}°${lat >= 0 ? 'N' : 'S'}`;
+  const lngSym = `${Math.abs(lng).toFixed(4)}°${lng >= 0 ? 'E' : 'W'}`;
+  return `${latSym}, ${lngSym}`;
 }
 
 /* ======================== PAGES ======================== */
@@ -455,7 +538,7 @@ function DashboardPage({ ships, alerts, statsHistory, liveStats, onNav }) {
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(212,175,55,0.12)" />
             <XAxis dataKey="t" stroke="#7fa3b8" fontSize={11} />
             <YAxis stroke="#7fa3b8" fontSize={11} />
-            <Tooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+            <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
             <Line type="monotone" dataKey="msgs" stroke="#2fd9c4" strokeWidth={2} dot={false} name="Msgs/sec" />
           </LineChart>
         </ResponsiveContainer>
@@ -590,7 +673,7 @@ function EcosystemPage({ ships, zones }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(212,175,55,0.12)" />
               <XAxis dataKey="name" stroke="#7fa3b8" fontSize={10} />
               <YAxis stroke="#7fa3b8" fontSize={11} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+              <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
               <Bar dataKey="count" name="Vessels present">
                 {occupancy.map((o, i) => <Cell key={i} fill={o.fill} />)}
               </Bar>
@@ -677,7 +760,7 @@ function AnalyticsPage({ ships, alerts, statsHistory }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(212,175,55,0.12)" />
               <XAxis dataKey="t" stroke="#7fa3b8" fontSize={11} />
               <YAxis stroke="#7fa3b8" fontSize={11} />
-              <Tooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+              <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
               <Legend />
               <Line type="monotone" dataKey="msgs" stroke="#2fd9c4" strokeWidth={2} dot={false} name="Msgs/sec" />
               <Line type="monotone" dataKey="latency" stroke="#d4af37" strokeWidth={2} dot={false} name="Latency (ms)" />
@@ -690,7 +773,7 @@ function AnalyticsPage({ ships, alerts, statsHistory }) {
               <Pie data={dist} dataKey="value" nameKey="name" innerRadius={45} outerRadius={80} paddingAngle={2}>
                 {dist.map((d, i) => <Cell key={i} fill={BAND_COLOR[d.name]} />)}
               </Pie>
-              <Tooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+              <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -703,7 +786,7 @@ function AnalyticsPage({ ships, alerts, statsHistory }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(212,175,55,0.12)" />
               <XAxis dataKey="name" stroke="#7fa3b8" fontSize={10} />
               <YAxis stroke="#7fa3b8" fontSize={11} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+              <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
               <Bar dataKey="count" fill="#ff6a5f" name="Alerts" />
             </BarChart>
           </ResponsiveContainer>
@@ -1146,6 +1229,10 @@ export default function SeaPulseApp() {
         .sp-panel-body { padding: 14px 18px; }
         .sp-link-btn { background: none; border: none; color: var(--turquoise); font-size: 12px; cursor: pointer; font-weight: 600; }
         .sp-map-wrap { border-radius: 4px; overflow: hidden; border: 3px solid var(--gold); box-shadow: 0 0 0 1px var(--leather-2), 0 4px 14px rgba(40,25,10,0.4); }
+        .leaflet-container { border-radius: 4px !important; }
+        .sp-map-overlay { position: absolute; right: 18px; top: 18px; background: rgba(10,18,26,0.78); color: #fff; padding: 6px 10px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; z-index: 2200; box-shadow: 0 6px 18px rgba(0,0,0,0.4); }
+        .sp-grid-label { background: rgba(10,18,26,0.78); color: #fff; padding: 4px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+        .sp-ship-icon { filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45)); }
         .sp-map-svg { width: 100%; height: 100%; display: block; }
         .sp-grid-line { stroke: rgba(212,175,55,0.08); stroke-dasharray: 2,4; }
         .sp-zone-label { font-size: 9px; font-family: 'Inter', sans-serif; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.5px; }

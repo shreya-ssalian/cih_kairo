@@ -1,4 +1,4 @@
-# SeaPulse— Maritime Surveillance Dashboard
+# SeaPulse — Maritime Surveillance Dashboard
 
 A front-end-only, mock-data maritime surveillance command center. No build step,
 no server — open `index.html` in a browser and it runs.
@@ -6,7 +6,7 @@ no server — open `index.html` in a browser and it runs.
 ## Project structure
 
 ```
-tidewatch/
+SeaPulse/
 ├── index.html            Markup + tags that wire everything together
 ├── css/
 │   └── styles.css        All styling (theme tokens, layout, components)
@@ -38,27 +38,28 @@ tidewatch/
 These are plain scripts (no bundler, no ES modules) so they share one global
 scope, in the order listed in `index.html`:
 
-`config → state → maps → simulation → kpi → alerts-ui → table → riskcenter
-→ shippanel → charts → footer → nav → controls → main`
+`config → state → maps → simulation → kpi → alerts-ui → table → riskcenter → shippanel → charts → footer → nav → controls → main`
 
 A few files run code immediately at load time and depend on an earlier file
 already having defined things:
-- `charts.js` and `kpi.js` read from `config.js` (icons, `COUNTRIES`) as soon
-  as they load, and `charts.js` needs the Chart.js CDN script loaded first.
-- `nav.js` builds the sidebar immediately using `NAV`/`icons` from `config.js`.
-- `main.js` calls functions from nearly every other file, so it must be last.
+
+* `charts.js` and `kpi.js` read from `config.js` (icons, `COUNTRIES`) as soon
+as they load, and `charts.js` needs the Chart.js CDN script loaded first.
+* `nav.js` builds the sidebar immediately using `NAV`/`icons` from `config.js`.
+* `main.js` calls functions from nearly every other file, so it must be last.
 
 If you add a new file, either append it before `main.js`, or wrap its
 top-level code in a function and call that function from `main.js` instead.
 
 ## External dependencies (loaded via CDN, no install needed)
 
-- [Leaflet](https://leafletjs.com/) — maps
-- [Chart.js](https://www.chartjs.org/) — analytics charts
-- Google Fonts: Pirata One, Cinzel, IM Fell English, Special Elite
+* [Leaflet](https://leafletjs.com/) — maps
+* [Chart.js](https://www.chartjs.org/) — analytics charts
+* Google Fonts: Pirata One, Cinzel, IM Fell English, Special Elite
 
 ## Data
 
 Everything is simulated client-side (`simulation.js` + `main.js`'s
 `setInterval(tick, 1200)`). There is no backend — swap the simulation tick
 for a WebSocket handler if you want to wire in real AIS data.
+

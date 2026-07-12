@@ -1,3 +1,17 @@
-node_modules/
-dist/
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.venv/
+backend/*.egg-info/
+
+# Env files
+.env
+frontend/.env
+backend/.env
+
+# OS
 .DS_Store

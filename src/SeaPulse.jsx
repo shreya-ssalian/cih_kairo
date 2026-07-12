@@ -493,7 +493,7 @@ function formatDeg(lat, lng) {
 
 /* ======================== PAGES ======================== */
 
-function DashboardPage({ ships, alerts, statsHistory, liveStats, onNav }) {
+function DashboardPage({ ships, alerts, statsHistory, liveStats, onNav, selectedShipId, setSelectedShipId }) {
   const highSusp = ships.filter(s => s.suspicion >= 70).length;
   const ecoThreats = ships.filter(s => s.ecosystem >= 50).length;
   const fishingAlerts = alerts.filter(a => a.type === 'fishing').length;
@@ -521,12 +521,14 @@ function DashboardPage({ ships, alerts, statsHistory, liveStats, onNav }) {
       </div>
 
       <div className="sp-cols">
-        <Panel title="Live Ocean Map" icon={<MapIcon size={16} />} right={<button className="sp-link-btn" onClick={() => onNav('map')}>Open full map →</button>}>
-          <OceanMap zones={INITIAL_ZONES} ships={ships} onSelectShip={() => {}} trailsOn={true} tick={0} height={340} />
+          <Panel title="Live Ocean Map" icon={<MapIcon size={16} />} right={<button className="sp-link-btn" onClick={() => onNav('map')}>Open full map →</button>}>
+          <OceanMap zones={INITIAL_ZONES} ships={ships} selectedShipId={selectedShipId} onSelectShip={setSelectedShipId} trailsOn={true} tick={0} height={340} />
         </Panel>
         <Panel title="Recent Alerts" icon={<AlertTriangle size={16} />} right={<button className="sp-link-btn" onClick={() => onNav('alerts')}>View all →</button>}>
           <div className="sp-alert-list" style={{ maxHeight: 340 }}>
-            {alerts.slice(0, 8).map(a => <AlertRow key={a.id} a={a} />)}
+            {alerts.slice(0, 8).map(a => (
+              <AlertRow key={a.id} a={a} onClick={() => { if (a.shipId) setSelectedShipId(a.shipId); }} />
+            ))}
             {alerts.length === 0 && <div className="sp-empty">No alerts yet — simulation warming up.</div>}
           </div>
         </Panel>
@@ -547,9 +549,9 @@ function DashboardPage({ ships, alerts, statsHistory, liveStats, onNav }) {
   );
 }
 
-function AlertRow({ a }) {
+function AlertRow({ a, onClick }) {
   return (
-    <div className="sp-alert-row">
+    <div className="sp-alert-row" onClick={onClick} style={{ cursor: onClick ? 'pointer' : 'default' }}>
       <div className="sp-alert-emoji">{a.emoji}</div>
       <div className="sp-alert-body">
         <div className="sp-alert-top">
@@ -654,6 +656,21 @@ function AlertsPage({ alerts }) {
   );
 }
 
+function EcosystemTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0];
+  const val = p.value;
+  const color = p.color || p.fill || (p.payload && p.payload.fill) || '#2fd9c4';
+  return (
+    <div style={{ background: '#0d2338', color: '#d6e6ee', borderRadius: 10, padding: '10px 12px', boxShadow: '0 10px 24px rgba(2,8,23,0.6)', minWidth: 160 }}>
+      <div style={{ fontSize: 12, color: 'rgba(212,175,55,0.18)', marginBottom: 6, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 700 }}>
+        <span style={{ color: color }}>Vessels present : {val}</span>
+      </div>
+    </div>
+  );
+}
+
 function EcosystemPage({ ships, zones }) {
   const ecoThreats = ships.filter(s => s.ecosystem >= 50);
   const avgEco = ships.length ? Math.round(ships.reduce((a, s) => a + s.ecosystem, 0) / ships.length) : 0;
@@ -673,7 +690,7 @@ function EcosystemPage({ ships, zones }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(212,175,55,0.12)" />
               <XAxis dataKey="name" stroke="#7fa3b8" fontSize={10} />
               <YAxis stroke="#7fa3b8" fontSize={11} allowDecimals={false} />
-              <RechartsTooltip contentStyle={{ background: '#0d2338', border: '1px solid rgba(212,175,55,0.3)', borderRadius: 8, fontSize: 12 }} />
+              <RechartsTooltip content={<EcosystemTooltip />} />
               <Bar dataKey="count" name="Vessels present">
                 {occupancy.map((o, i) => <Cell key={i} fill={o.fill} />)}
               </Bar>
@@ -1145,6 +1162,15 @@ export default function SeaPulseApp() {
     <div className="sp-root">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+        /* Make the page background match the site theme so the white
+           browser boundary no longer appears */
+        html, body { height: 100%; margin: 0; padding: 0; background-color: #d8bd85; }
+        body {
+          background:
+            radial-gradient(ellipse at 15% 15%, rgba(140,100,50,0.18), transparent 45%),
+            radial-gradient(ellipse at 85% 80%, rgba(120,80,40,0.18), transparent 50%),
+            linear-gradient(160deg, #e6d29e, #d8bd85 55%, #cdb078);
+        }
         .sp-root {
           --bg: #dfc99a; --bg-panel: #f0e2ba; --bg-panel-2: #e6d29e;
           --border: rgba(90,58,26,0.35);
@@ -1154,15 +1180,22 @@ export default function SeaPulseApp() {
           --leather-text: #d9c493; --leather-text-strong: #f3e3ba;
           --ink: #3a2712; --ink-muted: #7a5c34;
           --text: var(--ink); --text-muted: var(--ink-muted);
-          background:
-            radial-gradient(ellipse at 15% 15%, rgba(140,100,50,0.18), transparent 45%),
-            radial-gradient(ellipse at 85% 80%, rgba(120,80,40,0.18), transparent 50%),
-            linear-gradient(160deg, #e6d29e, #d8bd85 55%, #cdb078);
+          background: transparent;
           color: var(--text);
           font-family: 'Inter', sans-serif; min-height: 100vh;
           border-radius: 12px; overflow: hidden; position: relative;
           box-shadow: inset 0 0 90px rgba(60,35,10,0.35);
+          /* Themed scrollbars */
+          scrollbar-color: var(--gold) rgba(0,0,0,0.08);
         }
+        /* Apply themed scrollbars globally so browser edge scroll is themed */
+        html, body, .sp-root, .sp-panel, .sp-panel-body, .sp-map-wrap, .sp-table-wrap, .sp-alert-list { scrollbar-color: var(--gold) rgba(0,0,0,0.08); }
+        html::-webkit-scrollbar, body::-webkit-scrollbar, .sp-root::-webkit-scrollbar, .sp-panel::-webkit-scrollbar, .sp-panel-body::-webkit-scrollbar, .sp-map-wrap::-webkit-scrollbar, .sp-table-wrap::-webkit-scrollbar, .sp-alert-list::-webkit-scrollbar, *::-webkit-scrollbar { width: 12px; height: 12px; }
+        html::-webkit-scrollbar-track-piece, body::-webkit-scrollbar-track-piece, .sp-root::-webkit-scrollbar-track-piece, .sp-panel::-webkit-scrollbar-track-piece, .sp-panel-body::-webkit-scrollbar-track-piece, .sp-map-wrap::-webkit-scrollbar-track-piece, .sp-table-wrap::-webkit-scrollbar-track-piece, .sp-alert-list::-webkit-scrollbar-track-piece, *::-webkit-scrollbar-track-piece,
+        html::-webkit-scrollbar-track, body::-webkit-scrollbar-track, .sp-root::-webkit-scrollbar-track, .sp-panel::-webkit-scrollbar-track, .sp-panel-body::-webkit-scrollbar-track, .sp-map-wrap::-webkit-scrollbar-track, .sp-table-wrap::-webkit-scrollbar-track, .sp-alert-list::-webkit-scrollbar-track, *::-webkit-scrollbar-track { background: rgba(0,0,0,0.06); border-radius: 8px; }
+        html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb, .sp-root::-webkit-scrollbar-thumb, .sp-panel::-webkit-scrollbar-thumb, .sp-panel-body::-webkit-scrollbar-thumb, .sp-map-wrap::-webkit-scrollbar-thumb, .sp-table-wrap::-webkit-scrollbar-thumb, .sp-alert-list::-webkit-scrollbar-thumb, *::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--gold-bright), var(--gold)); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12); }
+        html::-webkit-scrollbar-corner, body::-webkit-scrollbar-corner, *::-webkit-scrollbar-corner { background: transparent; }
+        html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover, .sp-root::-webkit-scrollbar-thumb:hover, .sp-panel::-webkit-scrollbar-thumb:hover, .sp-panel-body::-webkit-scrollbar-thumb:hover, .sp-map-wrap::-webkit-scrollbar-thumb:hover, .sp-table-wrap::-webkit-scrollbar-thumb:hover, .sp-alert-list::-webkit-scrollbar-thumb:hover, *::-webkit-scrollbar-thumb:hover { filter: brightness(0.95); }
         .sp-root::before {
           content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5; opacity: 0.5; mix-blend-mode: multiply;
           background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='matrix' values='0 0 0 0 0.35  0 0 0 0 0.27  0 0 0 0 0.15  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
@@ -1331,7 +1364,7 @@ export default function SeaPulseApp() {
       </div>
 
       <div className="sp-content">
-        {activePage === 'dashboard' && <DashboardPage ships={ships} alerts={alerts} statsHistory={statsHistory} liveStats={liveStats} onNav={setActivePage} />}
+        {activePage === 'dashboard' && <DashboardPage ships={ships} alerts={alerts} statsHistory={statsHistory} liveStats={liveStats} onNav={setActivePage} selectedShipId={selectedShipId} setSelectedShipId={setSelectedShipId} />}
         {activePage === 'map' && <LiveMapPage zones={zones} ships={ships} selectedShipId={selectedShipId} setSelectedShipId={setSelectedShipId} trailsOn={trailsOn} tick={tick} />}
         {activePage === 'fleet' && <FleetPage ships={ships} selectedShipId={selectedShipId} setSelectedShipId={setSelectedShipId} zones={zones} />}
         {activePage === 'alerts' && <AlertsPage alerts={alerts} />}
